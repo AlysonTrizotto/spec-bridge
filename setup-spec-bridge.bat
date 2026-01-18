@@ -23,24 +23,65 @@ if %ERRORLEVEL% neq 0 (
     echo [OK] NPM detectado.
 )
 
-where python >nul 2>nul
+where git >nul 2>nul
 if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Python nao encontrado. Por favor, instale em https://python.org/
+    echo [ERROR] Git nao encontrado.
     exit /b 1
 ) else (
-    echo [OK] Python detectado.
+    echo [OK] Git detectado.
 )
 
-:: Verificar se o modulo venv esta disponivel (incluindo ensurepip)
-python -c "import venv, ensurepip" >nul 2>nul
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Modulo 'venv' ou 'ensurepip' do Python nao detectado. 
-    echo Por favor, reinstale o Python e garanta que 'pip' e 'venv' estao marcados na instalacao.
-    exit /b 1
-) else (
+:: Detecacao inteligente do Executavel Python
+set PYTHON_EXE=
+
+python --version >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    set PYTHON_EXE=python
+    goto :FoundPython
+)
+
+python3 --version >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    set PYTHON_EXE=python3
+    goto :FoundPython
+)
+
+py --version >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    set PYTHON_EXE=py
+    goto :FoundPython
+)
+
+echo [ERROR] Python nao encontrado ou e apenas um atalho da Microsoft Store.
+echo Por favor, instale o Python oficial em https://python.org/
+exit /b 1
+
+:FoundPython
+echo [OK] Usando interpretador: %PYTHON_EXE%
+%PYTHON_EXE% --version
+
+:: Verificar modulo venv
+set USE_VIRTUALENV=false
+%PYTHON_EXE% -c "import venv" >nul 2>nul
+if %ERRORLEVEL% equ 0 (
     echo [OK] Modulo 'venv' detectado.
+    goto :CreateDirs
 )
 
+echo [WARN] Modulo nativo 'venv' nao encontrado.
+echo [*] Tentando instalar 'virtualenv' via PIP como fallback...
+
+call %PYTHON_EXE% -m pip install --user virtualenv
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Falha ao instalar 'virtualenv'.
+    echo O Python detectado (%PYTHON_EXE%) nao possui 'venv' nem 'pip' funcionais.
+    exit /b 1
+)
+
+set USE_VIRTUALENV=true
+echo [OK] 'virtualenv' instalado com sucesso.
+
+:CreateDirs
 :: 1. Criar estrutura de diretorios
 echo [1/5] Criando diretorios de sistema...
 if not exist ".spec-bridge\tools" mkdir ".spec-bridge\tools"
@@ -48,26 +89,46 @@ if not exist "docs\specs" mkdir "docs\specs"
 if not exist "bin" mkdir "bin"
 
 :: 1.1 Preparar Virtual Environment
-if not exist ".spec-bridge\venv" (
-    echo [*] Criando ambiente virtual Python...
-    python -m venv .spec-bridge\venv
-    if %ERRORLEVEL% neq 0 (
-        echo [ERROR] Falha ao criar ambiente virtual.
-        exit /b 1
-    )
-)
+if exist ".spec-bridge\venv" goto :PipCheck
+
+echo [*] Criando ambiente virtual Python...
+if "%USE_VIRTUALENV%"=="true" goto :UseVirtualEnv
+
+:UseNativeVenv
+call %PYTHON_EXE% -m venv ".spec-bridge\venv"
+if %ERRORLEVEL% neq 0 goto :VenvFail
+goto :PipCheck
+
+:UseVirtualEnv
+call %PYTHON_EXE% -m virtualenv ".spec-bridge\venv"
+if %ERRORLEVEL% neq 0 goto :VenvFail
+goto :PipCheck
+
+:VenvFail
+echo [ERROR] Falha ao criar ambiente virtual.
+exit /b 1
+
+:PipCheck
 set VENV_PIP=.spec-bridge\venv\Scripts\pip.exe
 
-if not exist "%VENV_PIP%" (
-    echo [ERROR] Venv criado mas %VENV_PIP% nao encontrado.
-    echo Tentando recriar...
-    rmdir /s /q .spec-bridge\venv
-    python -m venv .spec-bridge\venv
-    if not exist "%VENV_PIP%" (
-        echo [ERROR] Falha critica ao preparar o ambiente Python.
-        exit /b 1
-    )
+if exist "%VENV_PIP%" goto :SuccessVenv
+
+echo [ERROR] Venv criado mas %VENV_PIP% nao encontrado.
+echo Tentando recriar...
+if exist ".spec-bridge\venv" rmdir /s /q ".spec-bridge\venv"
+
+if "%USE_VIRTUALENV%"=="true" (
+    call %PYTHON_EXE% -m virtualenv ".spec-bridge\venv"
+) else (
+    call %PYTHON_EXE% -m venv ".spec-bridge\venv"
 )
+
+if not exist "%VENV_PIP%" (
+    echo [ERROR] Falha critica ao preparar o ambiente Python.
+    exit /b 1
+)
+
+:SuccessVenv
 
 :: 2. Clonar e Instalar ai-coders-context
 echo [2/5] Instalando ai-coders-context...
@@ -113,7 +174,7 @@ echo.
 echo function generateSpecs(featureName^) {
 echo     const FEATURE_PATH = path.join(BASE_SPECS_PATH, featureName^);
 echo     try {
-echo         if (!fs.existsSync(FEATURE_PATH^)^) fs.mkdirSync(FEATURE_PATH, { recursive: true }^);
+echo         if (^^!fs.existsSync(FEATURE_PATH^)^) fs.mkdirSync(FEATURE_PATH, { recursive: true }^);
 echo         console.error(`[1/3] Varrendo codebase com ai-coders-context...`^);
 echo         try {
 echo             execSync(`node ${CONTEXT_TOOL} init . --lang pt-BR`, { stdio: 'inherit' }^);
@@ -127,8 +188,8 @@ echo             contextSummary = fs.readFileSync(contextFile, 'utf8'^).substrin
 echo         }
 echo         console.error(`[2/3] Preparando base tecnica (Taxonomia RPIC^)...`^);
 echo         const files = [
-echo             { ext: 'r.spec.md', title: 'Research ^& Business Truth' },
-echo             { ext: 'p.spec.md', title: 'Technical Planning ^& Contracts' },
+echo             { ext: 'r.spec.md', title: 'Research and Business Truth' },
+echo             { ext: 'p.spec.md', title: 'Technical Planning and Contracts' },
 echo             { ext: 'i.spec.md', title: 'Implementation Plan' },
 echo             { ext: 'c.spec.md', title: 'Environment Configuration' }
 echo         ];
@@ -136,13 +197,13 @@ echo         console.error(`[3/3] Gerando arquivos de especificacao...`^);
 echo         files.forEach(file =^> {
 echo             const fileName = `${featureName}.${file.ext}`;
 echo             const fullPath = path.join(FEATURE_PATH, fileName^);
-echo             if (!fs.existsSync(fullPath^)^) {
+echo             if (^^!fs.existsSync(fullPath^)^) {
 echo                 const dateHeader = new Date(^).toLocaleString('pt-BR'^);
 echo                 const content = `# 📝 ${file.title} - ${featureName}\n\n^> Gerado via Spec-Bridge em ${dateHeader}\n\n## 🔍 Contexto Tecnico Base\n${contextSummary}\n\n---\n## 📋 Checklist de Engenharia\n- [ ] Validado contexto local\n- [ ] Revisado arquitetura\n- [ ] Alinhado com requisitos de negocio`;
 echo                 fs.writeFileSync(fullPath, content^);
 echo                 console.error(`   OK Criado: ${fileName}`^);
 echo             } else {
-echo                 console.error(`   !! Pulado (ja existe^): ${fileName}`^);
+echo                 console.error(`   ^^!^^! Pulado (ja existe^): ${fileName}`^);
 echo             }
 echo         }^);
 echo         return `Sucesso! Specs para "${featureName}" geradas em ${FEATURE_PATH}`;
